@@ -8,10 +8,16 @@ data class HomeState(
 
 sealed interface HomeIntent{
     data object Refresh: HomeIntent
+    data class ToggleBookmark(val id: Int) : HomeIntent
 }
 
 data class Book(
     val id: Int,
     val title: String,
-    val author: String
+    val author: String,
+    val category: String,
+    val pages: Int,
+    val year: Int,
+    val description: String,
+    val isBookmarked: Boolean = false
 )
