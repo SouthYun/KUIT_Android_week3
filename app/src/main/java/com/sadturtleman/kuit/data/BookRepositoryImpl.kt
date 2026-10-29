@@ -17,11 +17,11 @@ class BookRepositoryImpl @Inject constructor(
 
     //북마크의 유일한 원본 DB
     private val bookmarkedIds = MutableStateFlow<Set<String>>(emptySet())
-    private var lastFetched: List<VolumeDto> = emptyList()   // 북마크 화면용 캐시
+    private val fetchedBooks = mutableMapOf<String, VolumeDto>()   // 지금까지 받아 온 책 전부
 
     override fun observeBooks(query: String): Flow<List<Book>> {
         val fetched: Flow<List<VolumeDto>> = flow { emit(service.searchBooks(query).items) }
-            .onEach { lastFetched = it }
+            .onEach { dtos -> dtos.forEach { fetchedBooks[it.id] = it } }
 
         // 검색 결과 + 북마크 id 합치기.
         // 북마크만 바뀌면 서버 요청 없이 아래 블록만 다시 실행
@@ -32,7 +32,7 @@ class BookRepositoryImpl @Inject constructor(
 
     override fun observeBookmarkedBooks(): Flow<List<Book>> =
         bookmarkedIds.map { ids ->
-            lastFetched.filter { it.id in ids }.map { it.toBook(isBookmarked = true) }
+            ids.mapNotNull { id -> fetchedBooks[id] }.map { it.toBook(isBookmarked = true) }
         }
 
     override suspend fun getBook(id: String): Book =
