@@ -2,55 +2,55 @@ package com.sadturtleman.kuit.presentation.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.sadturtleman.kuit.domain.SearchBooksUseCase
+import com.sadturtleman.kuit.domain.ObserveBooksUseCase
 import com.sadturtleman.kuit.domain.ToggleBookmarkUseCase
+import com.sadturtleman.kuit.presentation.toUserMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import java.net.UnknownHostException
 import javax.inject.Inject
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val searchBooks: SearchBooksUseCase,
+    private val observeBooks: ObserveBooksUseCase,
     private val toggleBookmark: ToggleBookmarkUseCase,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(HomeUiState())
-    val state = _state.asStateFlow()
+    private val query = MutableStateFlow("android") //실행된 검색어
+    private val refresh = MutableStateFlow(0) //새로고침 트리거: 숫자가 바뀔 때마다 다시 요청
 
-    init { onIntent(HomeIntent.Refresh) }
+    @OptIn(ExperimentalCoroutinesApi::class)          // flatMapLatest 사용 표시
+    val state: StateFlow<HomeUiState> =
+        combine(query, refresh) { q, _ -> q }          // 검색어가 바뀌거나 새로고침하면
+            .flatMapLatest { q ->                      // 이전 검색은 버리고 새 검색으로 갈아탐.
+                observeBooks(q)
+                    .map { books -> HomeUiState(books = books, query = q) }
+                    .onStart { emit(HomeUiState(isLoading = true, query = q)) } // 로딩 표시
+                    .catch { e -> emit(HomeUiState(error = e.toUserMessage(), query = q)) } // 실패해도 앱이 죽지 않게 함.
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = HomeUiState(isLoading = true),
+            )
 
     fun onIntent(intent: HomeIntent) {
         when (intent) {
-            HomeIntent.Refresh -> load(_state.value.query)
+            HomeIntent.Refresh -> refresh.update { it + 1 }
             is HomeIntent.Search -> {
                 if (intent.query.isBlank()) return      // 빈 검색어는 요청하지 않는다
-                load(intent.query)
+                query.value = intent.query
             }
-            is HomeIntent.ToggleBookmark -> toggle(intent.id)
+            is HomeIntent.ToggleBookmark -> toggleBookmark(intent.id)   // 재조회 없음
         }
-    }
-
-    private fun load(query: String) = viewModelScope.launch {
-        _state.update { it.copy(isLoading = true, error = null, query = query) }
-        runCatching { searchBooks(query) }
-            .onSuccess { books -> _state.update { it.copy(isLoading = false, books = books) } }
-            .onFailure { e -> _state.update { it.copy(isLoading = false, error = e.toUserMessage()) } }
-    }
-
-    // Repository 가 상태의 주인이므로 다시 읽어서 새 UiState 로. (로딩 표시 없이 조용히 갱신)
-    private fun toggle(id: String) = viewModelScope.launch {
-        toggleBookmark(id)
-        runCatching { searchBooks(_state.value.query) }
-            .onSuccess { books -> _state.update { it.copy(books = books) } }
-    }
-
-    // 4주차 미션 C — 예외 → 사용자 문구. 변환 위치는 ViewModel.
-    private fun Throwable.toUserMessage(): String = when (this) {
-        is UnknownHostException -> "인터넷 연결을 확인하세요"
-        else -> message ?: "알 수 없는 오류"
     }
 }
